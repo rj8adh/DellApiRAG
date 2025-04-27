@@ -23,26 +23,26 @@ def scrapePage(id: int):
     return json.loads(response.content)
 
 
-def scrapePages(linksAndIds: list):
+def scrapePages(links_and_ids: list):
     allPages = {}
-    for pageNum, link in enumerate(linksAndIds, 1):
+    for pageNum, link in enumerate(links_and_ids, 1):
         allPages[BASEURL + link[0]] = scrapePage(link[1])
-        print(f"On Page #{pageNum}/{len(linksAndIds)}")
+        print(f"On Page #{pageNum}/{len(links_and_ids)}")
 
     with open("storedData/allDocumentation.json", 'w') as docs:
         json.dump(allPages, docs, indent=4)
     return allPages
     
-    
+
 if __name__ == "__main__":
-    # with open('storedData/linksAndIds.json', 'r') as file:
-    #     allLinksAndIds = json.load(file)
-    # pprint(scrapePages(allLinksAndIds))
+    with open('storedData/linksAndIds.json', 'r') as file:
+        allLinksAndIds = json.load(file)
+    pprint(scrapePages(allLinksAndIds))
 
-    # newVals = {}
+    newVals = {}
 
-    # with open('storedData/allDocumentation.json', 'r') as f:
-    #     allData = dict(json.load(f))
+    with open('storedData/allDocumentation.json', 'r') as f:
+        allData = dict(json.load(f))
 
     # for dat in allData:
     #     newUrl = str(dat)[:40]
