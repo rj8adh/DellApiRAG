@@ -30,9 +30,17 @@ def scrapePages(links_and_ids: list):
         print(f"On Page #{pageNum}/{len(links_and_ids)}")
 
     with open("storedData/allDocumentation.json", 'w') as docs:
-        json.dump(allPages, docs, indent=4)
+        json.dump(fixUrls(allPages), docs, indent=4)
     return allPages
-    
+
+
+def fixUrls(allDocumentation: dict):
+    newDocs = allDocumentation.copy()
+    for document in allDocumentation:
+        newKey = document[:32] + '7ce7d11a-ff9c-47cc-b958-bd30dc9770f0/versions/2.0.0/' + document[32:]
+        newDocs[newKey] = allDocumentation[document]
+    return newDocs
+
 
 if __name__ == "__main__":
     with open('storedData/linksAndIds.json', 'r') as file:
@@ -41,9 +49,12 @@ if __name__ == "__main__":
 
     newVals = {}
 
-    with open('storedData/allDocumentation.json', 'r') as f:
-        allData = dict(json.load(f))
+    # with open('storedData/allDocumentation.json', 'r') as f:
+    #     allData = dict(json.load(f))
+    # f.close()
+    # newData = fixUrls(allData)
+    # with open('storedData/allDocumentation.json', 'w') as fi:
+    #     json.dump(newData, fi, indent=4)
+    # f.close()
 
-    # for dat in allData:
-    #     newUrl = str(dat)[:40]
-    #     newVals[]
+    

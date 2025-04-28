@@ -3,6 +3,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 import json
 from pprint import pprint
+from scrapeAllPages import fixUrls
 
 UUID = "7ce7d11a-ff9c-47cc-b958-bd30dc9770f0"
 BASEURL = "https://developer.dell.com/apis"
@@ -35,7 +36,7 @@ async def scrapePages(links_and_ids: list):
 
     # Storing the results
     with open("storedData/allDocumentation.json", 'w') as out:
-        json.dump(allPages, out, indent=4)
+        json.dump(fixUrls(allPages), out, indent=4)
     return allPages
 
 if __name__ == "__main__":
