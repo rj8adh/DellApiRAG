@@ -35,12 +35,12 @@ async def scrapePages(links_and_ids: list):
         await asyncio.gather(*tasks)
 
     # Storing the results
-    with open("storedData/allDocumentation.json", 'w') as out:
+    with open("ScrapingStuff/storedData/allDocumentation.json", 'w') as out:
         json.dump(fixUrls(allPages), out, indent=4)
     return allPages
 
 if __name__ == "__main__":
-    with open('storedData/linksAndIds.json', 'r') as f:
+    with open('ScrapingStuff/storedData/linksAndIds.json', 'r') as f:
         linksAndIds = json.load(f)
 
     allDocs = asyncio.run(scrapePages(linksAndIds))

@@ -35,26 +35,29 @@ def scrapePages(links_and_ids: list):
 
 
 def fixUrls(allDocumentation: dict):
-    newDocs = allDocumentation.copy()
+    newDocs = {}
     for document in allDocumentation:
-        newKey = document[:32] + '7ce7d11a-ff9c-47cc-b958-bd30dc9770f0/versions/2.0.0/' + document[32:]
+        if 'developer.dell.com/apis/' in document:
+            newKey = document[:32] + '7ce7d11a-ff9c-47cc-b958-bd30dc9770f0/versions/2.0.0/' + document[32:]
+        else:
+            newKey = document[:31] + '/7ce7d11a-ff9c-47cc-b958-bd30dc9770f0/versions/2.0.0/' + document[31:]
         newDocs[newKey] = allDocumentation[document]
     return newDocs
 
 
 if __name__ == "__main__":
-    with open('storedData/linksAndIds.json', 'r') as file:
-        allLinksAndIds = json.load(file)
-    pprint(scrapePages(allLinksAndIds))
+    # with open('storedData/linksAndIds.json', 'r') as file:
+    #     allLinksAndIds = json.load(file)
+    # pprint(scrapePages(allLinksAndIds))
 
-    newVals = {}
+    # newVals = {}
 
-    # with open('storedData/allDocumentation.json', 'r') as f:
-    #     allData = dict(json.load(f))
-    # f.close()
-    # newData = fixUrls(allData)
-    # with open('storedData/allDocumentation.json', 'w') as fi:
-    #     json.dump(newData, fi, indent=4)
-    # f.close()
+    with open('ScrapingStuff/storedData/allDocumentation.json', 'r') as f:
+        allData = dict(json.load(f))
+    f.close()
+    newData = fixUrls(allData)
+    with open('ScrapingStuff/storedData/allDocumentation.json', 'w') as fi:
+        json.dump(newData, fi, indent=4)
+    fi.close()
 
     
