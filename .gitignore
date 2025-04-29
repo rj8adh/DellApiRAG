@@ -1,5 +1,4 @@
 .env
-/ScrapingStuff/storedData/
+ScrapingStuff/storedData
 /asyncScraper.py
 __pycache__/
-formattingData.py
