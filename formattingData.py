@@ -1,159 +1,61 @@
 import json
+import os
 
-jsonExampleData = [
-    # Model Type Example API Data Thingie
-    {
-        "tagNames": [],
-        "references": ["apiprotoLockingId", "apiprotoSoftwareId"],
-        "deepReferences": ["apiprotoLockingId", "apiprotoSoftwareId"],
-        "modelRefList": [],
-        "_id": "6613de5068ed810012514844",
-        "baseUri": "/ccp_api_dtias_2.0_a08.json/definitions/apiprotoMachineInfo",
-        "branchId": 98415,
-        "branchNodeId": 4756418,
-        "createdAt": "2024-03-14T07:52:41.482Z",
-        "data": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "softwareIds": {
-                    "type": "array",
-                    "items": {"$ref": "#/definitions/apiprotoSoftwareId"}
-                },
-                "lockingIds": {
-                    "type": "array",
-                    "items": {"$ref": "#/definitions/apiprotoLockingId"}
-                }
-            },
-            "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)"
-        },
-        "dataHash": "7345b8ae0b025b99c87cfdd4ce81569044a4587e",
-        "dataSize": "273",
-        "format": "json",
-        "isFile": False,
-        "isLatestVersion": True,
-        "name": "apiprotoMachineInfo",
-        "nodeId": 4786986,
-        "projectId": 5318,
-        "refName": "#/definitions/apiprotoMachineInfo",
-        "snapshotId": 4454003,
-        "spec": "oas2",
-        "summary": "Represents machine information.", 
-        "type": "model",
-        "updatedAt": "2024-03-14T07:52:41.482Z",
-        "uri": "/ccp_api_dtias_2.0_a08.json/definitions/apiprotoMachineInfo",
-        "version": "0.0",
-        "models": [],
-        "mockUrl": "fulcrum-rest-api-guide/branches/dtias_release_branch_2.0/4990838undefined",
-        "bundledModels": {
-            "apiprotoLockingId": {
-                "type": "object",
-                "properties": {
-                    "lockingIdCode": {"type": "string"},
-                    "lockingIdValue": {"type": "string"}
-                },
-                 "summary": "Defines a locking ID.",
-                "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
-                "children": 2,
-                "childrenCount": "{2}"
-            },
-            "apiprotoSoftwareId": {
-                "type": "object",
-                "properties": {
-                    "softwareId": {"type": "string"},
-                    "plc": {"type": "string"}
-                },
-                "summary": "Defines a software ID.",
-                "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
-                "children": 2,
-                "childrenCount": "{2}"
-            }
-        }
-    },
-    # Article Type Example API Data Thingie
-    {
-        "tagNames": [],
-        "references": [],
-        "deepReferences": [],
-        "modelRefList": [],
-        "_id": "65e560288581f00012e25f35",
-        "baseUri": "/docs/Example-GET-operation-on-server.md",
-        "branchId": 98415,
-        "branchNodeId": 4579402,
-        "createdAt": "2024-03-27T10:57:57.609Z",
-        "data": "# Example GET operation on a server using a token\n\n#### Prerequisites\nCreate a token. For more information, see [Create a token](Create-token.md).\n\nAfter you create a token, you can use the token from the **id token** field of the API response to retrieve server details.\n\n#### Steps\n\n1. Retrieve the token from the **id-token** field in the Create a token API response. For example:\n```\n      \n        id-token: eyJhbGciOiJSUz\n``` \n2. Set the **Token** environmental variable to the token obtained in the previous step. For example:\n```json\nexport Token=eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiw\n```\n\n3. Use the following example command as a reference to make your own API call. **Token** is a variable set to the generated token content. \n```shell\ncurl -X 'GET' \\  'https://DTIAS_ip/v1/tenants/{tenant_id}/search/resources/{Id}' \\  -H 'accept: application/json; charset=utf-8' \\  -H \"Authorization: Bearer $Token\"\n```\n>Note: In the API request, *{Id}* is the resource ID. \"DTIAS_ip\" is the IP address of the Dell Telecom Infrastructure Automation Suite instance, and \"tenant_id\" is **Fulcrum**.",
-        "dataHash": "7b482bd74ebe4905938eb2921d1c0ecc85333362",
-        "dataSize": "3230",
-        "format": "markdown",
-        "isFile": True,
-        "isLatestVersion": True,
-        "name": "Example GET operation on a server using a token",
-        "nodeId": 1313171,
-        "projectId": 5318,
-        "snapshotId": 4524104,
-        "spec": "md",
-        "summary": "Create a token. For more information, see Create a token.",
-        "type": "article",
-        "updatedAt": "2024-03-27T10:57:57.609Z",
-        "uri": "/docs/Example-GET-operation-on-server.md",
-        "version": "0.0",
-        "models": [],
-        "mockUrl": "fulcrum-rest-api-guide/branches/dtias_release_branch_2.0/7570653undefined"
-    }
-]
+# --- Helper Functions (format_properties and format_bundled_models remain largely the same) ---
 
-# Formats schematic properties into text for the RAG model to use later
+# (format_properties function - unchanged from previous version)
 def format_properties(properties_dict):
+    """Helper function to format schema properties into text."""
     propTexts = []
-
     if not properties_dict:
-        return "It has no defined properties."
-    
+        return " It has no defined properties."
     for propName, propDetails in properties_dict.items():
-
         propType = propDetails.get('type', 'any')
         description = f"Property '{propName}' is type '{propType}'."
-
         if propType == 'array':
-
             items = propDetails.get('items', {})
             itemType = items.get('type')
             itemRef = items.get('$ref')
-            
             if itemRef:
-                refName = itemRef.split('/')[-1] # Getting the reference name
+                refName = itemRef.split('/')[-1]
                 description += f" It is an array of '{refName}'."
             elif itemType:
                  description += f" It is an array of type '{itemType}'."
             else:
                  description += " It is an array of unspecified items."
-
         elif '$ref' in propDetails:
              refName = propDetails['$ref'].split('/')[-1]
              description = f"Property '{propName}' references model '{refName}'."
-
-        # Add description/example if available (might need to adapt field names later)
+        # Add description/example if available
         if propDetails.get('description'):
-             description += f" Description: {propDetails['description']}"
+             # Limit description length slightly for brevity if needed, or keep full
+             desc_text = propDetails['description'].replace('\n', ' ').strip()
+             # if len(desc_text) > 150: desc_text = desc_text[:147] + "..."
+             description += f" Description: {desc_text}"
         if propDetails.get('example'):
              description += f" Example: {propDetails['example']}"
-
         propTexts.append(description)
     return " Properties include: " + " ".join(propTexts)
 
-def format_bundled_models(modelDict):
-    modelTexts = []
 
+# (format_bundled_models function - unchanged from previous version)
+def format_bundled_models(modelDict):
+    """Helper function to format bundled model definitions."""
+    modelTexts = []
     if not modelDict:
         return ""
-    
     for modelName, modelDetails in modelDict.items():
         model_type = modelDetails.get('type', 'object')
         summary = modelDetails.get('summary', '')
+        # Add model's own description if present
+        model_desc = modelDetails.get('description', '').replace('\n', ' ').strip()
+
         text = f"Includes definition for '{modelName}' (type: {model_type})."
-        if summary:
-            text += f" Summary: {summary}"
-        # Recursively format properties of the bundled model
+        if summary and summary.strip():
+            text += f" Summary: {summary.strip()}"
+        if model_desc:
+             text += f" Description: {model_desc}"
+
         properties = modelDetails.get('properties')
         if properties:
              text += format_properties(properties)
@@ -162,72 +64,220 @@ def format_bundled_models(modelDict):
         modelTexts.append(text)
     return " Bundled model definitions: " + " ".join(modelTexts)
 
+# --- NEW Helper Function for HTTP Operations ---
+
+def format_request_parameters(request_dict):
+    """Formats request parameters (path, query, headers, cookie) into text."""
+    if not request_dict:
+        return ""
+
+    param_texts = []
+
+    # Process Path Parameters
+    path_params = request_dict.get('path', [])
+    if path_params:
+        path_texts = ["Path Parameters:"]
+        for param in path_params:
+            name = param.get('name', 'unnamed')
+            desc = param.get('description', '')
+            ptype = param.get('schema', {}).get('type', 'string')
+            req = 'required' if param.get('required') else 'optional'
+            path_texts.append(f"- {name} ({ptype}, {req}): {desc}")
+        param_texts.append(" ".join(path_texts))
+
+    # Process Query Parameters (similar structure)
+    query_params = request_dict.get('query', [])
+    if query_params:
+        query_texts = ["Query Parameters:"]
+        for param in query_params:
+            name = param.get('name', 'unnamed')
+            desc = param.get('description', '')
+            ptype = param.get('schema', {}).get('type', 'string')
+            req = 'required' if param.get('required') else 'optional'
+            query_texts.append(f"- {name} ({ptype}, {req}): {desc}")
+        param_texts.append(" ".join(query_texts))
+
+    # Process Header Parameters (similar structure)
+    header_params = request_dict.get('headers', [])
+    if header_params:
+        header_texts = ["Header Parameters:"]
+        for param in header_params:
+             name = param.get('name', 'unnamed')
+             desc = param.get('description', '')
+             ptype = param.get('schema', {}).get('type', 'string')
+             req = 'required' if param.get('required') else 'optional'
+             header_texts.append(f"- {name} ({ptype}, {req}): {desc}")
+        param_texts.append(" ".join(header_texts))
+
+    # Process Cookie Parameters (similar structure)
+    cookie_params = request_dict.get('cookie', [])
+    if cookie_params:
+        cookie_texts = ["Cookie Parameters:"]
+        for param in cookie_params:
+             name = param.get('name', 'unnamed')
+             desc = param.get('description', '')
+             ptype = param.get('schema', {}).get('type', 'string')
+             req = 'required' if param.get('required') else 'optional'
+             cookie_texts.append(f"- {name} ({ptype}, {req}): {desc}")
+        param_texts.append(" ".join(cookie_texts))
+
+    # Process Request Body (if defined, often in request['body'] or request['contents'])
+    # Note: OpenAPI 2.0 (spec: oas2) uses 'parameters' array with 'in: body'
+    # OpenAPI 3.x uses 'requestBody'. Adapt if needed based on actual spec used.
+    request_body_schema = None
+    request_body_content = request_dict.get('body', {}).get('contents', []) # Check common Stoplight structure
+    if request_body_content and isinstance(request_body_content, list):
+        # Assuming first content describes the body
+        body_media_type = request_body_content[0].get('mediaType', 'unknown')
+        request_body_schema = request_body_content[0].get('schema')
+        if request_body_schema:
+             body_desc = format_properties(request_body_schema.get('properties'))
+             param_texts.append(f"Request Body ({body_media_type}):{body_desc}")
+
+    return "\n".join(param_texts)
+
+
+def format_responses(responses_list):
+    """Formats the list of possible API responses into text."""
+    if not responses_list:
+        return "No responses defined."
+
+    response_texts = ["Responses:"]
+    for response in responses_list:
+        code = response.get('code', 'unknown')
+        desc = response.get('description', 'No description.')
+        res_text = f"- Code {code}: {desc}"
+
+        contents = response.get('contents', [])
+        if contents and isinstance(contents, list):
+            # Usually only one content type per response code, take the first
+            content = contents[0]
+            media_type = content.get('mediaType', 'unknown')
+            schema = content.get('schema')
+            if schema:
+                schema_desc = format_properties(schema.get('properties'))
+                res_text += f" Response Body ({media_type}):{schema_desc}"
+            else:
+                res_text += f" Response Body ({media_type}): No schema defined."
+        else:
+            res_text += " No response body defined." # Or specific body if not schema-based
+
+        response_texts.append(res_text)
+
+    return "\n".join(response_texts)
+
+
+# --- Main Processing Function (Updated) ---
 
 def process_api_doc_entry(entry):
-
+    """Processes a single JSON entry to extract text for RAG."""
     entryType = entry.get('type', 'unknown')
+    # Use top-level name/summary first
     name = entry.get('name', 'Unnamed Document')
     summary = entry.get('summary', '')
+    uri_for_warning = entry.get('uri', entry.get('_id', 'unknown_source'))
 
     contentParts = [f"Title: {name}"]
-    if summary:
-        contentParts.append(f"Summary: {summary}")
+    if summary and summary.strip():
+        contentParts.append(f"Summary: {summary.strip()}")
 
     data = entry.get('data', None)
     textContent = ""
 
     if entryType == 'article' and isinstance(data, str):
-        # For articles/markdown, the data field is the main content
-        textContent = data
-    elif entryType == 'model' and isinstance(data, dict):
-        # For models, parse the schema structure
-        schemaType = data.get('type', 'object')
-        modelDescription = f"This defines the model '{name}', which is a '{schemaType}'."
+        textContent = data # Keep markdown as is
 
-        # Format main properties
+    elif entryType == 'model' and isinstance(data, dict):
+        schemaType = data.get('type', 'object')
+        modelDescription = f"This defines the data model '{name}', which is a '{schemaType}'."
         properties = data.get('properties')
         modelDescription += format_properties(properties)
-
-        # Format bundled models
         bundled = entry.get('bundledModels')
         modelDescription += format_bundled_models(bundled)
-
         textContent = modelDescription
-    elif isinstance(data, str): # Fallback if type isn't clear but data is string
-         print(f"Warning: Entry '{name}' has unrecognized type '{entryType}' but string data. Using data directly.")
+
+    elif entryType == 'http_operation' and isinstance(data, dict):
+        # Extract details specific to the HTTP operation
+        method = data.get('method', 'UNKNOWN_METHOD').upper()
+        path = data.get('path', 'unknown_path')
+        op_desc = data.get('description', '')
+        op_summary = data.get('summary', '') # Can be different from top-level summary
+
+        operation_details = [f"API Operation: {method} {path}"]
+        if op_summary and op_summary.strip():
+            operation_details.append(f"Operation Summary: {op_summary.strip()}")
+        if op_desc and op_desc.strip():
+             operation_details.append(f"Operation Description: {op_desc.strip()}")
+
+        # Format Request
+        request_info = format_request_parameters(data.get('request'))
+        if request_info:
+            operation_details.append(f"Request Details:\n{request_info}")
+
+        # Format Responses
+        response_info = format_responses(data.get('responses'))
+        if response_info:
+             operation_details.append(f"Response Details:\n{response_info}")
+
+        # Add Bundled Models specific to this operation if any
+        bundled = entry.get('bundledModels')
+        bundled_info = format_bundled_models(bundled)
+        if bundled_info:
+             operation_details.append(f"Referenced Model Definitions:\n{bundled_info}")
+
+        textContent = "\n".join(operation_details)
+
+
+    elif isinstance(data, str): # Fallback
+         print(f"Warning: Entry '{name}' ({uri_for_warning}) has unrecognized type '{entryType}' but string data. Using data directly.")
          textContent = data
     else:
-        print(f"Warning: Could not extract primary content for '{name}' of type '{entryType}'. Data: {data}")
-        textContent = "Content could not be processed." # Or skip this entry
+        print(f"Warning: Could not extract primary content for '{name}' ({uri_for_warning}) of type '{entryType}'. Data: {data}")
+        textContent = "Content could not be processed."
 
     contentParts.append(f"Content: {textContent.strip()}")
-
-    # Combine all parts into a single text block
     fullText = "\n\n".join(contentParts)
 
     return fullText.strip()
 
+
+# --- Main Execution Block (Unchanged from previous version) ---
+
 if __name__ == "__main__":
-    # jsonDat = jsonExampleData
-    with open("ScrapingStuff/storedData/allDocumentation.json", 'r') as f:
-        jsonDat = json.load(f)
+    try:
+        with open("ScrapingStuff/storedData/allDocumentation.json", 'r', encoding='utf-8') as f:
+            jsonDat = json.load(f)
+    except FileNotFoundError:
+        print("Error: Input file 'ScrapingStuff/storedData/allDocumentation.json' not found.")
+        exit()
+    except json.JSONDecodeError:
+         print("Error: Could not decode JSON from input file.")
+         exit()
 
-    # Processing
+    if not isinstance(jsonDat, dict):
+        print(f"Error: Expected a dictionary in the JSON file, but got {type(jsonDat)}.")
+        exit()
+
     processedDocs = {}
-    print("Processing Api Docs")
-    for i, link in enumerate(jsonDat):
-        # if i > 5: # Testing on first 5 entries
-        #     break
-        processed = process_api_doc_entry(jsonDat[link])
-        if processed:
-            processedDocs[link] = processed
+    print(f"Processing {len(jsonDat)} Api Docs entries...")
+    count = 0
+    for link, entry_object in jsonDat.items():
+        if isinstance(entry_object, dict):
+            processed = process_api_doc_entry(entry_object)
+            if processed:
+                processedDocs[link] = processed
+                count += 1
+        else:
+             print(f"Warning: Skipping entry with key '{link}' because its value is not a dictionary ({type(entry_object)}).")
 
-    # Just printing the outputs
-    for doc in processedDocs:
-        print(f"--- Processed Entry ---")
-        print(f"Source URI: {doc}")
-        print(f"Text for Embedding:\n{processedDocs[doc]}")
-        print("-" * 25)
+    print(f"Successfully processed {count} entries.")
 
-    with open("ScrapingStuff/storedData/RagFormattedData.json", 'w') as f:
-        json.dump(processedDocs, f, indent=4)
+    try:
+        output_filepath = "ScrapingStuff/storedData/RagFormattedData.json"
+        with open(output_filepath, 'w', encoding='utf-8') as f:
+            json.dump(processedDocs, f, indent=4)
+        print(f"\nSuccessfully saved processed data to {output_filepath}")
+    except IOError as e:
+        print(f"\nError: Could not write output file to {output_filepath}: {e}")
+    except Exception as e:
+        print(f"\nAn unexpected error occurred during saving: {e}")
