@@ -167,10 +167,9 @@ def format_responses(responses_list):
     return "\n".join(response_texts)
 
 
-# --- Main Processing Function (Updated) ---
-
+# Processing a specific json entry into a RAG text format
 def process_api_doc_entry(entry):
-    """Processes a single JSON entry to extract text for RAG."""
+
     entryType = entry.get('type', 'unknown')
     # Use top-level name/summary first
     name = entry.get('name', 'Unnamed Document')
