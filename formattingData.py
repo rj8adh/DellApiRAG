@@ -1,11 +1,8 @@
 import json
 import os
 
-# --- Helper Functions (format_properties and format_bundled_models remain largely the same) ---
-
-# (format_properties function - unchanged from previous version)
+# Formatting all the data into the output format we want (so that our LLM can read it)
 def format_properties(properties_dict):
-    """Helper function to format schema properties into text."""
     propTexts = []
     if not properties_dict:
         return " It has no defined properties."
@@ -28,7 +25,7 @@ def format_properties(properties_dict):
              description = f"Property '{propName}' references model '{refName}'."
         # Add description/example if available
         if propDetails.get('description'):
-             # Limit description length slightly for brevity if needed, or keep full
+             # Limit description length slightly
              desc_text = propDetails['description'].replace('\n', ' ').strip()
              # if len(desc_text) > 150: desc_text = desc_text[:147] + "..."
              description += f" Description: {desc_text}"
@@ -38,9 +35,7 @@ def format_properties(properties_dict):
     return " Properties include: " + " ".join(propTexts)
 
 
-# (format_bundled_models function - unchanged from previous version)
 def format_bundled_models(modelDict):
-    """Helper function to format bundled model definitions."""
     modelTexts = []
     if not modelDict:
         return ""
@@ -64,8 +59,7 @@ def format_bundled_models(modelDict):
         modelTexts.append(text)
     return " Bundled model definitions: " + " ".join(modelTexts)
 
-# --- NEW Helper Function for HTTP Operations ---
-
+# Formatting the request parameters into text so it's easier for the llm
 def format_request_parameters(request_dict):
     """Formats request parameters (path, query, headers, cookie) into text."""
     if not request_dict:
@@ -240,7 +234,6 @@ def process_api_doc_entry(entry):
     return fullText.strip()
 
 
-# --- Main Execution Block (Unchanged from previous version) ---
 
 if __name__ == "__main__":
     try:

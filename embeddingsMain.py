@@ -189,20 +189,20 @@ if __name__ == '__main__':
         print(f"❌ Error: Input data is not a valid non-empty dictionary. Exiting.")
         exit()
 
-    # 2. Generate Documents
+    # Generating all the langchain documents
     all_docs = generate_docs(processed_data_dict)
     if not all_docs:
          print("No documents were generated. Exiting.")
          exit()
 
-    # 3. Split Documents
+    # Chunking the documents
     chunks = split_documents(all_docs)
     if not chunks:
         print("No chunks were created after splitting. Exiting.")
         exit()
 
-    # 4. Add Chunks to Chroma DB (with progress)
+    # Adding and vectorizing the chunks to the chromadb
     print("\nAdding chunks to Chroma DB...")
-    db_instance = add_to_chroma(chunks) # This function now handles batching and progress
+    db_instance = add_to_chroma(chunks) # Has a cool progress bar now 😎
 
     print("\n--- Script Finished ---")
