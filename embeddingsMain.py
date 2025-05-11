@@ -14,7 +14,6 @@ from tqdm import tqdm # <-- Import tqdm for progress bars
 print(f"PyTorch version: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
 
-# Set the device to CPU if CUDA is not available or preferred
 # device = "cuda" if torch.cuda.is_available() else "cpu"
 device = "cpu" # Force CPU as per original code
 print(f"Using device: {device}") # Confirm which device is used

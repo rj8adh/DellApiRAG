@@ -3,3 +3,5 @@ ScrapingStuff/storedData
 /asyncScraper.py
 __pycache__/
 /chromaDb
+multiQuery.py
+testUI.py
