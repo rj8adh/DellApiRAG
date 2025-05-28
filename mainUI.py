@@ -14,17 +14,26 @@ st.caption("Ask me questions about the documentation!")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Initialize session state for the toggle button
+# Initialize session state for the toggle buttons
 if "use_query_reframing" not in st.session_state:
     st.session_state.use_query_reframing = True # Default to using reframing
 
-# Add the toggle button to the sidebar
+if "use_cloudify_api" not in st.session_state:
+    st.session_state.use_cloudify_api = False # Default to not using Cloudify API
+
+# Add the toggle buttons to the sidebar
 with st.sidebar:
     st.header("Settings")
     st.session_state.use_query_reframing = st.toggle(
         "Use Query Reframing",
         value=st.session_state.use_query_reframing,
         help="Turn this on to allow the system to rephrase your query based on chat history for better context. Turn it off to send the original query directly."
+    )
+    
+    st.session_state.use_cloudify_api = st.toggle(
+        "Use Cloudify API",
+        value=st.session_state.use_cloudify_api,
+        help="Turn this on to use the Cloudify API for enhanced responses. Turn it off to use the standard RAG system only."
     )
 
 
@@ -53,6 +62,8 @@ if user_prompt := st.chat_input("What is your question?"):
 
     # --- Determine the final query based on the toggle state ---
     final_query_for_rag = user_prompt # Start with the original user prompt
+    embedding_text_for_rag = user_prompt # Default embedding text
+    rephrased_query_info = None # Track if query was rephrased for immediate display
 
     # Check if the reframe toggle is on
     if st.session_state.use_query_reframing:
@@ -65,20 +76,26 @@ if user_prompt := st.chat_input("What is your question?"):
 
         # Reframe the user's prompt based on the chat history (NON-STREAMING call)
         try:
-            rephrased_query = reframeQuery.reframe_query_with_history(
+            # FIX: Unpack the tuple returned by reframe_query_with_history
+            reframed_query, embedding_text = reframeQuery.reframe_query_with_history(
                 query=user_prompt,
                 chat_history=chat_history_for_reframing
             )
-            # If the rephrased query is different, use it
-            if rephrased_query != user_prompt:
-                 final_query_for_rag = rephrased_query
+            
+            # If the reframed query is different, use it
+            if reframed_query != user_prompt:
+                 final_query_for_rag = reframed_query
+                 embedding_text_for_rag = embedding_text
+                 rephrased_query_info = final_query_for_rag # Store for immediate display
                  print(f"DEBUG: Query rephrased from '{user_prompt}' to '{final_query_for_rag}'")
+                 print(f"DEBUG: Embedding text: '{embedding_text_for_rag}'")
             else:
                 print(f"DEBUG: Query reframing active, but rephrased query is same as original: '{user_prompt}'")
 
         except Exception as e:
             st.warning(f"Could not reframe query due to an error: {e}. Using original query.")
             final_query_for_rag = user_prompt # Fallback to original query
+            embedding_text_for_rag = user_prompt # Fallback to original query
             print(f"DEBUG: Error during query reframing: {e}. Using original query.")
 
     else:
@@ -94,21 +111,34 @@ if user_prompt := st.chat_input("What is your question?"):
     with st.chat_message("assistant"):
         message_placeholder = st.empty() # Placeholder for the streaming response
         sources_placeholder = st.empty() # Placeholder for the sources
+        info_placeholder = st.empty() # Placeholder for rephrased query info
+        timer_placeholder = st.empty() # Placeholder for timer info
+        
         full_rag_response = ""
         rag_sources = []
         time_to_first_chunk = None # Initialize variable to store the timer result
 
+        # Display rephrased query info immediately if available
+        if rephrased_query_info:
+            info_placeholder.caption(f"ℹ️ Query sent to LLM: \"{rephrased_query_info}\"\nQuery embedded: \"{embedding_text_for_rag}\"")
+
         try:
-            print(f"DEBUG: Calling contextModel.single_query with query: '{final_query_for_rag}'")
+            print(f"DEBUG: Calling contextModel.single_query with query: '{final_query_for_rag}' and embedding_text: '{embedding_text_for_rag}'")
+            print(f"DEBUG: Cloudify API enabled: {st.session_state.use_cloudify_api}")
 
             # --- Start Timer ---
             # Record the time just before calling the RAG model function
             start_time_stream = time.time()
             # --- End Timer ---
 
-            # Call the single_query function from your contextModel file
-            # This part assumes contextModel.single_query returns a stream generator and sources
-            response_stream, rag_sources = contextModel.single_query(final_query_for_rag, use_formatted_data=False)
+            # FIX: Pass both the reframed query and embedding text as separate parameters
+            # Also pass the Cloudify API setting if your contextModel supports it
+            response_stream, rag_sources = contextModel.single_query(
+                query_text=final_query_for_rag,
+                text_to_embed=embedding_text_for_rag,
+                use_formatted_data=False,
+                use_cloudify_docs=st.session_state.use_cloudify_api  # Pass the Cloudify API setting
+            )
 
             if response_stream:
                 first_chunk_received = False
@@ -119,13 +149,15 @@ if user_prompt := st.chat_input("What is your question?"):
                         # Record the time when the very first chunk is received
                         end_time_first_chunk = time.time()
                         time_to_first_chunk = end_time_first_chunk - start_time_stream
+                        
+                        # Display timer info immediately
+                        timer_placeholder.caption(f"⏱️ Time to first token: {time_to_first_chunk:.2f} seconds")
                         first_chunk_received = True
                         # --- End Timer ---
 
                     full_rag_response += chunk
                     # Update the placeholder with the accumulated response as chunks arrive
                     message_placeholder.markdown(full_rag_response)
-
 
                 print(f"DEBUG: RAG Stream finished. Full response length: {len(full_rag_response)}")
 
@@ -139,19 +171,12 @@ if user_prompt := st.chat_input("What is your question?"):
                     print("DEBUG: No RAG sources returned.")
                     sources_placeholder.empty() # Remove placeholder if no sources
 
-                # --- Display Timer Result ---
-                # Display the calculated time to the first chunk after the response is complete
-                if time_to_first_chunk is not None:
-                     st.caption(f"⏱️ Time to first token: {time_to_first_chunk:.2f} seconds")
-                # --- End Display Timer Result ---
-
             else:
                 # Handle the case where response_stream is None (e.g., an error occurred before streaming)
                 error_message = "Sorry, I encountered an error trying to get a response from the RAG system (no stream received)."
                 message_placeholder.markdown(error_message)
                 full_rag_response = error_message
                 print("DEBUG: contextModel.single_query returned None for response_stream.")
-
 
         except ImportError as ie:
             error_msg = f"Import Error: {ie}. Make sure 'contextModel.py' and its dependencies are accessible."
@@ -163,7 +188,6 @@ if user_prompt := st.chat_input("What is your question?"):
             st.error(error_msg)
             full_rag_response = "Sorry, I ran into a problem processing your request. Please try again."
             print(f"DEBUG: Exception during contextModel.single_query call: {e}")
-
 
     # Add assistant response and potentially timer info/rephrased query to chat history
     assistant_message_to_store = {"role": "assistant", "content": full_rag_response}

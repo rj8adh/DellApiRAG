@@ -1,11 +1,9 @@
-# contextModel.py
-
 import sys
 import time # Import the time module
 from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate
 from langchain_ollama import OllamaLLM
-from embeddingsMain import get_embed_function # Assuming this is efficient or also caches
+from embeddingsMain import get_embed_function
 from langchain.schema.document import Document
 from pprint import pprint
 import argparse
@@ -13,9 +11,14 @@ import json
 import re
 import os
 
+# --- MODIFICATION: Import the new query reframer ---
+from reframeQuery import reframe_query_with_history
+
 # --- Constants ---
 CHROMADATAPATH = 'chromaDb'
-RAG_FORMATTED_DATA_PATH = "ScrapingStuff/storedData/RagFormattedData.json" # Define path for JSON data
+DTIAS_COLLECTION_NAME = "DTIAS"
+CLOUDIFY_COLLECTION_NAME = "Cloudify"
+RAG_FORMATTED_DATA_PATH = "ScrapingStuff/storedData/RagFormattedData.json"
 
 PROMPT = """
 You are an AI Documentation Chatbot. Your sole purpose is to provide answers based *exclusively* on the API documentation context provided below.
@@ -35,15 +38,11 @@ Answer:
 
 # --- Global Initialization of Expensive Resources ---
 print("\nCONTEXT_MODEL.PY: Initializing global resources...")
-start_time_global_init = time.time() # Start timer for global init
+start_time_global_init = time.time()
 
 # 1. LLM Model
 try:
-    # MODEL = OllamaLLM(model="phi3:mini", temperature=.3)
-    MODEL = OllamaLLM(model="qwen2.5:14b", temperature=.3)
-    # MODEL = OllamaLLM(model="qwen2.5:14b-instruct-q4_K_M", temperature=.3) # Using the quantized model to make it run faster
-    # MODEL = OllamaLLM(model="qwen2.5:14b-instruct-q4_K_S", temperature=.3)
-    # qwen2.5:14b-instruct-q4_K_S
+    MODEL = OllamaLLM(model="deepseek-coder:6.7b-instruct", temperature=.3)
     print("✅ Global LLM (MODEL) initialized.")
 except Exception as e:
     MODEL = None
@@ -57,19 +56,37 @@ except Exception as e:
     EMBEDDING_FUNCTION = None
     print(f"❌ Failed to initialize global EMBEDDING_FUNCTION: {e}")
 
-# 3. ChromaDB Connection
-DB = None # Initialize DB as None
+# 3. ChromaDB Connections
+DB_DTIAS = None
+DB_CLOUDIFY = None
+
 if EMBEDDING_FUNCTION and os.path.exists(CHROMADATAPATH):
     try:
-        DB = Chroma(persist_directory=CHROMADATAPATH, embedding_function=EMBEDDING_FUNCTION)
-        print(f"✅ Global Chroma DB connection (DB) established to {CHROMADATAPATH}.")
+        DB_DTIAS = Chroma(
+            persist_directory=CHROMADATAPATH,
+            embedding_function=EMBEDDING_FUNCTION,
+            collection_name=DTIAS_COLLECTION_NAME
+        )
+        print(f"✅ Global Chroma DB connection (DB_DTIAS) established to {CHROMADATAPATH} for collection '{DTIAS_COLLECTION_NAME}'.")
     except Exception as e:
-        DB = None
-        print(f"❌ Failed to establish global Chroma DB connection (DB): {e}")
+        DB_DTIAS = None
+        print(f"❌ Failed to establish global Chroma DB connection (DB_DTIAS) for collection '{DTIAS_COLLECTION_NAME}': {e}")
+
+    try:
+        DB_CLOUDIFY = Chroma(
+            persist_directory=CHROMADATAPATH,
+            embedding_function=EMBEDDING_FUNCTION,
+            collection_name=CLOUDIFY_COLLECTION_NAME
+        )
+        print(f"✅ Global Chroma DB connection (DB_CLOUDIFY) established to {CHROMADATAPATH} for collection '{CLOUDIFY_COLLECTION_NAME}'.")
+    except Exception as e:
+        DB_CLOUDIFY = None
+        print(f"⚠️ Failed to establish global Chroma DB connection (DB_CLOUDIFY) for collection '{CLOUDIFY_COLLECTION_NAME}': {e}. This might be expected if the collection doesn't exist yet.")
+
 elif not os.path.exists(CHROMADATAPATH):
-    print(f"⚠️ Global Chroma DB path not found at {CHROMADATAPATH}. DB not initialized.")
+    print(f"⚠️ Global Chroma DB path not found at {CHROMADATAPATH}. DB connections not initialized.")
 elif not EMBEDDING_FUNCTION:
-    print(f"⚠️ Embedding function not available. DB not initialized.")
+    print(f"⚠️ Embedding function not available. DB connections not initialized.")
 
 
 # 4. Formatted RAG Data (optional, if used frequently)
@@ -85,7 +102,7 @@ if os.path.exists(RAG_FORMATTED_DATA_PATH):
 else:
     print(f"⚠️ Global RAG Formatted Data path not found at {RAG_FORMATTED_DATA_PATH}. Not loaded.")
 
-end_time_global_init = time.time() # End timer for global init
+end_time_global_init = time.time()
 print(f"CONTEXT_MODEL.PY: Global resource initialization complete in {end_time_global_init - start_time_global_init:.4f} seconds.")
 # --- End of Global Initialization ---
 
@@ -98,266 +115,320 @@ def parse_chunk_id(chunk_id: str) -> tuple[str | None, int | None]:
         return source, index
     return None, None
 
-def get_contextual_chunks(db_conn: Chroma | None, query_text: str, k: int = 4, window: int = 1) -> tuple[list[Document], list[str], list[str]]:
+def read_entire_cloudify_file(file_path: str) -> str:
+    """Read the entire content of a Cloudify documentation file."""
+    file_path.replace(r"\\", "/")
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"❌ Error reading Cloudify file {file_path}: {e}")
+        return f"[Error reading file: {file_path}]"
+
+def get_contextual_chunks(
+    db_dtias_conn: Chroma | None,
+    db_cloudify_conn: Chroma | None,
+    # This parameter is the text used for searching the DB.
+    text_for_embedding_search: str,
+    include_cloudify: bool,
+    k: int = 4,
+    window: int = 1
+) -> tuple[list[Document], list[str], list[str]]:
     print("\nGET_CONTEXTUAL_CHUNKS: Starting...")
     start_time_get_contextual = time.time()
 
-    if not db_conn: # Check if db_conn is None
-        print("❌ GET_CONTEXTUAL_CHUNKS: DB connection is not available.")
+    if not db_dtias_conn:
+        print("❌ GET_CONTEXTUAL_CHUNKS: DTIAS DB connection (db_dtias_conn) is not available.")
         end_time_get_contextual = time.time()
-        print(f"GET_CONTEXTUAL_CHUNKS: Finished (DB not available) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
+        print(f"GET_CONTEXTUAL_CHUNKS: Finished (DTIAS DB not available) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
         return [], [], []
+    
+    if include_cloudify and not db_cloudify_conn:
+        print("⚠️ GET_CONTEXTUAL_CHUNKS: Cloudify inclusion requested, but Cloudify DB connection (db_cloudify_conn) is not available. Proceeding with DTIAS only.")
+        include_cloudify = False
 
-    # ... (rest of your get_contextual_chunks function, ensure it uses the passed db_conn) ...
-    print(f"🔎 GET_CONTEXTUAL_CHUNKS: Initial search for top {k} chunks...")
+    print(f"🔎 GET_CONTEXTUAL_CHUNKS: Searching with embedding text: '{text_for_embedding_search}'")
     start_time_search = time.time()
-    initial_results = db_conn.similarity_search_with_score(query_text, k=k) # Use db_conn
+    
+    dtias_results = []
+    cloudify_results = []
+
+    # Query DTIAS collection - get top 2 results
+    if db_dtias_conn:
+        try:
+            dtias_search = db_dtias_conn.similarity_search_with_score(text_for_embedding_search, k=2)
+            for doc, score in dtias_search:
+                doc.metadata['_collection_source'] = 'dtias'
+            dtias_results = dtias_search
+            print(f"GET_CONTEXTUAL_CHUNKS: Found {len(dtias_results)} results from DTIAS (top 2).")
+        except Exception as e:
+            print(f"❌ GET_CONTEXTUAL_CHUNKS: Error searching DTIAS collection: {e}")
+
+    # Query Cloudify collection - get top 2 results
+    if include_cloudify and db_cloudify_conn:
+        try:
+            cloudify_search = db_cloudify_conn.similarity_search_with_score(text_for_embedding_search, k=2)
+            for doc, score in cloudify_search:
+                doc.metadata['_collection_source'] = 'cloudify'
+            cloudify_results = cloudify_search
+            print(f"GET_CONTEXTUAL_CHUNKS: Found {len(cloudify_results)} results from Cloudify (top 2).")
+        except Exception as e:
+            print(f"❌ GET_CONTEXTUAL_CHUNKS: Error searching Cloudify collection: {e}")
+
     end_time_search = time.time()
     print(f"GET_CONTEXTUAL_CHUNKS: Similarity search completed in {end_time_search - start_time_search:.4f} seconds.")
 
-    if not initial_results:
-        print("❌ GET_CONTEXTUAL_CHUNKS: NO INITIAL RESULTS FOUND FOR THE QUERY")
+    if not dtias_results and not cloudify_results:
+        print("❌ GET_CONTEXTUAL_CHUNKS: NO RESULTS FOUND FOR THE QUERY from any active collection.")
         end_time_get_contextual = time.time()
-        print(f"GET_CONTEXTUAL_CHUNKS: Finished (no initial results) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
+        print(f"GET_CONTEXTUAL_CHUNKS: Finished (no results) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
         return [], [], []
 
-    print(f"GET_CONTEXTUAL_CHUNKS: Found {len(initial_results)} initial results.")
+    print(f"GET_CONTEXTUAL_CHUNKS: Processing {len(dtias_results)} DTIAS and {len(cloudify_results)} Cloudify results...")
+    start_time_process = time.time()
 
-    all_ids_to_fetch = set()
-    original_top_k_ids = []
+    retrieved_docs_combined = []
+    all_sources = []
 
-    print(f"GET_CONTEXTUAL_CHUNKS: Identifying context window IDs for top {len(initial_results)} results (window={window})...")
-    start_time_identify_ids = time.time()
-    for i, (doc, score) in enumerate(initial_results):
-        doc_id = doc.metadata.get("id")
-        if not doc_id:
-            print(f"WARNING: Initial result {i+1} is missing 'id' metadata. Skipping context window for this result.")
-            continue
-
-        source, index = parse_chunk_id(doc_id)
-        if source is None or index is None:
-            print(f"WARNING: Could not parse source/index from ID '{doc_id}' for initial result {i+1}. Skipping context window for this result.")
-            continue
-
-        # print(f"   - Processing initial chunk {i+1}: ID='{doc_id}', Score={score:.4f}, Source='{source}', Index={index}") # Too verbose
-        original_top_k_ids.append(doc_id)
-        all_ids_to_fetch.add(doc_id)
-
-        for offset in range(-window, window + 1):
-            if offset == 0:
+    # Process DTIAS results - use context window as before
+    if dtias_results:
+        all_ids_to_fetch_dtias = set()
+        for doc, score in dtias_results:
+            doc_id = doc.metadata.get("id")
+            if not doc_id:
                 continue
-            neighbor_index = index + offset
-            if neighbor_index >= 0:
-                neighbor_id = f"{source}:{neighbor_index}"
-                all_ids_to_fetch.add(neighbor_id)
+            
+            source_file, index = parse_chunk_id(doc_id)
+            if source_file is None or index is None:
+                continue
 
-    end_time_identify_ids = time.time()
-    print(f"GET_CONTEXTUAL_CHUNKS: Identified {len(all_ids_to_fetch)} potential context IDs in {end_time_identify_ids - start_time_identify_ids:.4f} seconds.")
+            all_ids_to_fetch_dtias.add(doc_id)
+            
+            # Add context window
+            for offset in range(-window, window + 1):
+                if offset == 0:
+                    continue
+                neighbor_index = index + offset
+                if neighbor_index >= 0:
+                    neighbor_id = f"{source_file}:{neighbor_index}"
+                    all_ids_to_fetch_dtias.add(neighbor_id)
 
-    if not all_ids_to_fetch:
-        print("WARNING: No valid chunk IDs identified after processing initial results.")
-        end_time_get_contextual = time.time()
-        print(f"GET_CONTEXTUAL_CHUNKS: Finished (no valid IDs) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
-        return [], [], []
+        # Fetch DTIAS chunks
+        if all_ids_to_fetch_dtias:
+            list_ids_dtias = list(all_ids_to_fetch_dtias)
+            try:
+                retrieved_data_dtias = db_dtias_conn.get(ids=list_ids_dtias, include=["documents", "metadatas"])
+                if retrieved_data_dtias and retrieved_data_dtias.get('ids'):
+                    for id_val, doc_content, meta in zip(retrieved_data_dtias.get('ids', []), retrieved_data_dtias.get('documents', []), retrieved_data_dtias.get('metadatas', [])):
+                        if id_val and doc_content is not None and meta is not None:
+                            meta['_collection_source'] = 'dtias'
+                            retrieved_docs_combined.append(Document(page_content=doc_content, metadata=meta))
+                            source = meta.get('source')
+                            if source and source not in all_sources:
+                                all_sources.append(source)
+            except Exception as e:
+                print(f"❌ GET_CONTEXTUAL_CHUNKS: Error retrieving DTIAS chunks: {e}")
 
-    list_ids_to_fetch = list(all_ids_to_fetch)
-    print(f"GET_CONTEXTUAL_CHUNKS: Attempting to fetch {len(list_ids_to_fetch)} unique IDs...")
+    # Process Cloudify results - read entire files
+    if cloudify_results:
+        processed_cloudify_files = set()
+        for doc, score in cloudify_results:
+            doc_id = doc.metadata.get("id")
+            if not doc_id:
+                continue
+            
+            # Extract file path by removing chunk number
+            file_path = doc_id.split("#")[0]
+            
+            if file_path in processed_cloudify_files:
+                continue
+            
+            processed_cloudify_files.add(file_path)
+            
+            full_content = read_entire_cloudify_file(file_path)
+            
+            full_doc = Document(
+                page_content=full_content,
+                metadata={
+                    'source': file_path,
+                    'id': file_path,
+                    '_collection_source': 'cloudify',
+                    'is_full_file': True
+                }
+            )
+            retrieved_docs_combined.append(full_doc)
+            
+            if file_path not in all_sources:
+                all_sources.append(file_path)
 
-    try:
-        start_time_get_ids = time.time()
-        retrieved_data = db_conn.get(ids=list_ids_to_fetch, include=["documents", "metadatas"]) # Use db_conn
-        retrieved_ids_actual = retrieved_data.get('ids', [])
-        end_time_get_ids = time.time()
-        print(f"GET_CONTEXTUAL_CHUNKS: Successfully retrieved {len(retrieved_ids_actual)} chunks by ID in {end_time_get_ids - start_time_get_ids:.4f} seconds.")
-    except Exception as e:
-        print(f"❌ GET_CONTEXTUAL_CHUNKS: Error retrieving chunks by ID: {e}. Returning empty results.")
-        end_time_get_contextual = time.time()
-        print(f"GET_CONTEXTUAL_CHUNKS: Finished (retrieval error) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
-        return [], [], []
-
-    if not retrieved_ids_actual:
-        print("WARNING: db.get returned no documents despite requesting IDs.")
-        end_time_get_contextual = time.time()
-        print(f"GET_CONTEXTUAL_CHUNKS: Finished (db.get returned empty) in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
-        return [], [], []
-
-    start_time_process_retrieved = time.time()
-    docs_by_id = {
-        id_val: Document(page_content=doc, metadata=meta)
-        for id_val, doc, meta in zip(retrieved_ids_actual, retrieved_data.get('documents', []), retrieved_data.get('metadatas', []))
-        if id_val and doc is not None and meta is not None
-    }
-    context_docs = [docs_by_id[doc_id] for doc_id in retrieved_ids_actual if doc_id in docs_by_id]
-
+    # Sort documents
     def sort_key(doc):
-        doc_id = doc.metadata.get("id", "")
-        source, index = parse_chunk_id(doc_id)
-        source_val = source if source is not None else ""
-        index_val = index if index is not None else -1
-        return (source_val, index_val)
+        collection_pref = 0 if doc.metadata.get("_collection_source") == "dtias" else 1
+        if doc.metadata.get("is_full_file"):
+            return (collection_pref, doc.metadata.get("source", ""), 0)
+        else:
+            doc_id = doc.metadata.get("id", "")
+            source, index = parse_chunk_id(doc_id)
+            source_val = source if source is not None else ""
+            index_val = index if index is not None else -1
+            return (collection_pref, source_val, index_val)
 
-    context_docs.sort(key=sort_key)
+    retrieved_docs_combined.sort(key=sort_key)
+    
+    context_docs = retrieved_docs_combined
     sorted_retrieved_ids = [doc.metadata.get("id", "N/A") for doc in context_docs]
-    unique_sorted_sources = list(dict.fromkeys(doc.metadata.get("source", "N/A") for doc in context_docs))
 
-    end_time_process_retrieved = time.time()
-    print(f"✅ GET_CONTEXTUAL_CHUNKS: Retrieved and sorted {len(context_docs)} contextual documents in {end_time_process_retrieved - start_time_process_retrieved:.4f} seconds.")
+    end_time_process = time.time()
+    print(f"✅ GET_CONTEXTUAL_CHUNKS: Processed and sorted {len(context_docs)} documents in {end_time_process - start_time_process:.4f} seconds.")
+    print(f"   - DTIAS docs: {len([d for d in context_docs if d.metadata.get('_collection_source') == 'dtias'])}")
+    print(f"   - Cloudify docs: {len([d for d in context_docs if d.metadata.get('_collection_source') == 'cloudify'])}")
 
     end_time_get_contextual = time.time()
     print(f"GET_CONTEXTUAL_CHUNKS: Finished total execution in {end_time_get_contextual - start_time_get_contextual:.4f} seconds.")
-    return context_docs, sorted_retrieved_ids, unique_sorted_sources
+    return context_docs, sorted_retrieved_ids, all_sources
 
 
-def single_query(query_text: str, use_formatted_data: bool = False, k_val:int = 4):
-    print(f"\nSINGLE_QUERY: Starting for query: '{query_text}' | use_formatted_data: {use_formatted_data}")
+def single_query(query_text: str, use_cloudify_docs: bool = True, use_formatted_data: bool = False, k_val:int = 4, text_to_embed: str = ""):
+    # This check ensures that if the reframer fails and text_to_embed is empty,
+    # we fall back to using the main query_text for the embedding search.
+    if not text_to_embed:
+        text_to_embed = query_text
+        
+    print(f"\nSINGLE_QUERY: Starting for query: '{query_text}' | use_cloudify_docs: {use_cloudify_docs} | use_formatted_data: {use_formatted_data}")
     start_time_single_query = time.time()
 
     # --- Check if global resources are available ---
     if not MODEL:
         print("❌ SINGLE_QUERY: Global LLM (MODEL) not available.")
-        end_time_single_query = time.time()
-        print(f"SINGLE_QUERY: Finished (LLM not available) in {end_time_single_query - start_time_single_query:.4f} seconds.")
         def error_gen(): yield "Error: The AI model is not available."
         return error_gen(), []
 
-    if not EMBEDDING_FUNCTION: # Though DB check often implies this
+
+    if not EMBEDDING_FUNCTION:
         print("❌ SINGLE_QUERY: Global EMBEDDING_FUNCTION not available.")
-        end_time_single_query = time.time()
-        print(f"SINGLE_QUERY: Finished (Embeddings not available) in {end_time_single_query - start_time_single_query:.4f} seconds.")
         def error_gen(): yield "Error: The embedding service is not available."
         return error_gen(), []
 
-    if not DB and not use_formatted_data: # If not using formatted_data, DB is essential
-        print(f"❌ SINGLE_QUERY: Global Chroma DB (DB) not available and not using formatted_data mode.")
-        end_time_single_query = time.time()
-        print(f"SINGLE_QUERY: Finished (DB not available for RAG) in {end_time_single_query - start_time_single_query:.4f} seconds.")
-        def error_gen(): yield "Error: The documentation database is not available."
-        return error_gen(), []
+    if not use_formatted_data: # RAG mode
+        if not DB_DTIAS: # DTIAS is always required for RAG
+            print(f"❌ SINGLE_QUERY: Global DTIAS Chroma DB (DB_DTIAS) not available for RAG.")
+            def error_gen(): yield "Error: The primary documentation database (DTIAS) is not available."
+            return error_gen(), []
+        if use_cloudify_docs and not DB_CLOUDIFY:
+            print(f"⚠️ SINGLE_QUERY: Cloudify docs requested for RAG, but DB_CLOUDIFY not available. Proceeding with DTIAS only.")
 
-    if use_formatted_data and not ALL_RAG_DATA:
-        print(f"❌ SINGLE_QUERY: Formatted data mode selected, but ALL_RAG_DATA not loaded.")
-        end_time_single_query = time.time()
-        print(f"SINGLE_QUERY: Finished (Formatted data not loaded) in {end_time_single_query - start_time_single_query:.4f} seconds.")
-        def error_gen(): yield "Error: The formatted documentation content is not available."
-        return error_gen(), []
+    else: # Formatted data mode
+        if not ALL_RAG_DATA:
+            print(f"❌ SINGLE_QUERY: Formatted data mode selected, but ALL_RAG_DATA not loaded.")
+            def error_gen(): yield "Error: The formatted documentation content is not available."
+            return error_gen(), []
+        # For formatted data, an initial lookup is still done via get_contextual_chunks
+        if not DB_DTIAS:
+             print(f"❌ SINGLE_QUERY: DB_DTIAS not available for initial source lookup in formatted_data mode.")
+             def error_gen(): yield "Error: The primary database (DTIAS) is not available for source lookup."
+             return error_gen(), []
+        if use_cloudify_docs and not DB_CLOUDIFY:
+             print(f"⚠️ SINGLE_QUERY: Cloudify sources requested for formatted data lookup, but DB_CLOUDIFY not available. Proceeding with DTIAS sources only.")
 
-    # No longer need to initialize DB, EMBEDDING_FUNCTION here.
-    # Just use the global DB and ALL_RAG_DATA.
 
     retrieved_sources = []
     context_text = ""
-    context_docs = [] # Ensure it's initialized
+    context_docs = []
 
     if not use_formatted_data:
-        if not DB: # Redundant check if above checks are solid, but good for safety
-            print("❌ SINGLE_QUERY: No DB connection available for RAG mode.")
-            end_time_single_query = time.time()
-            print(f"SINGLE_QUERY: Finished (DB not available for RAG path) in {end_time_single_query - start_time_single_query:.4f} seconds.")
-            def error_gen(): yield "Database not available for search."
-            return error_gen(), []
-        # Pass the global DB connection to get_contextual_chunks
+        # --- MODIFICATION: Use `text_to_embed` for the database search ---
         start_time_rag_retrieval = time.time()
-        context_docs, retrieved_ids, retrieved_sources = get_contextual_chunks(DB, query_text, k=k_val, window=4)
+        context_docs, retrieved_ids, retrieved_sources = get_contextual_chunks(
+            DB_DTIAS,
+            DB_CLOUDIFY if use_cloudify_docs else None,
+            text_for_embedding_search=text_to_embed, # Use the optimized text for searching
+            include_cloudify=use_cloudify_docs,
+            k=k_val,
+            window=4
+        )
         end_time_rag_retrieval = time.time()
         print(f"SINGLE_QUERY: RAG Retrieval (get_contextual_chunks) completed in {end_time_rag_retrieval - start_time_rag_retrieval:.4f} seconds.")
 
         if not context_docs:
-            print("❌ SINGLE_QUERY: No relevant context found in the database for this query.")
-            end_time_single_query = time.time()
-            print(f"SINGLE_QUERY: Finished (no context found) in {end_time_single_query - start_time_single_query:.4f} seconds.")
+            print("❌ SINGLE_QUERY: No relevant context found in the database(s) for this query.")
             def empty_gen(): yield "I couldn't find relevant information in the documentation to answer your question."
             return empty_gen(), []
 
         start_time_context_format = time.time()
         context_pieces = []
-        last_source = None
+        last_source_file = None
         for i, doc in enumerate(context_docs):
-            current_source = doc.metadata.get("source")
+            current_source_file = doc.metadata.get("source")
             current_content = doc.page_content
+            
             if i > 0:
-                if current_source != last_source:
+                if current_source_file != last_source_file:
                     context_pieces.append("\n\n---\n\n")
-                elif current_source == last_source:
+                else:
                     context_pieces.append("\n\n")
+            
+            if doc.metadata.get("is_full_file"):
+                context_pieces.append(f"[Full content from {current_source_file}]\n\n")
+            
             context_pieces.append(current_content)
-            last_source = current_source
+            last_source_file = current_source_file
         context_text = "".join(context_pieces)
         end_time_context_format = time.time()
         print(f"SINGLE_QUERY: Context text formatting completed in {end_time_context_format - start_time_context_format:.4f} seconds.")
 
     else: # use_formatted_data is True
-        if not ALL_RAG_DATA: # Check if global data is loaded
-             print("❌ SINGLE_QUERY: RagFormattedData.json was not loaded globally.")
-             end_time_single_query = time.time()
-             print(f"SINGLE_QUERY: Finished (formatted data not loaded) in {end_time_single_query - start_time_single_query:.4f} seconds.")
-             def error_gen(): yield "Error: Formatted data file not available."
-             return error_gen(), []
-
-        # Need to perform a lightweight search to find relevant source URLs first
-        # We pass k=1 and window=0 because we only need the source URLs from the top few documents
-        # to then look up in ALL_RAG_DATA.
-        # Ensure DB is available even for this minimal lookup if your logic requires it.
-        if not DB:
-            print("❌ SINGLE_QUERY: DB connection needed for initial source lookup in formatted_data mode.")
-            end_time_single_query = time.time()
-            print(f"SINGLE_QUERY: Finished (DB not available for lookup) in {end_time_single_query - start_time_single_query:.4f} seconds.")
-            def error_gen(): yield "Database not available for initial source lookup."
-            return error_gen(), []
-
+        # --- MODIFICATION: Use `text_to_embed` for the database search ---
         start_time_formatted_lookup = time.time()
-        temp_context_docs, _, _ = get_contextual_chunks(DB, query_text, k=k_val, window=0) # Small k, window=0
+        temp_context_docs, _, _ = get_contextual_chunks(
+            DB_DTIAS,
+            DB_CLOUDIFY if use_cloudify_docs else None,
+            text_for_embedding_search=text_to_embed, # Use the optimized text for searching
+            include_cloudify=use_cloudify_docs,
+            k=k_val,
+            window=0
+        )
         end_time_formatted_lookup = time.time()
         print(f"SINGLE_QUERY: Formatted data source lookup (via get_contextual_chunks) completed in {end_time_formatted_lookup - start_time_formatted_lookup:.4f} seconds.")
 
         if not temp_context_docs:
-            print("❌ SINGLE_QUERY: No relevant base documents found for formatted data lookup.")
-            end_time_single_query = time.time()
-            print(f"SINGLE_QUERY: Finished (no base docs for lookup) in {end_time_single_query - start_time_single_query:.4f} seconds.")
+            print("❌ SINGLE_QUERY: No relevant base documents found for formatted data lookup from any active collection.")
             def empty_gen(): yield "I couldn't find base documents to retrieve formatted context."
             return empty_gen(), []
 
         start_time_formatted_build = time.time()
-        context_text_pieces = ["The first page of api documentation is:\n\n"]
+        context_text_pieces = ["The first page of API documentation is:\n\n"]
         unique_sources_used = set()
         for doc in temp_context_docs:
             source_url = doc.metadata.get("source")
             if source_url and source_url not in unique_sources_used:
-                # Use the pre-loaded ALL_RAG_DATA
                 page_content = ALL_RAG_DATA.get(source_url, f"[Content for {source_url} not found in pre-loaded RagFormattedData.json]\n")
                 context_text_pieces.append(page_content)
-                context_text_pieces.append("\n\nThe next page of api documentation is:\n\n")
+                context_text_pieces.append("\n\nThe next page of API documentation is:\n\n")
                 unique_sources_used.add(source_url)
 
-        # Remove the last "next page" separator
-        if len(context_text_pieces) > 1: # ensure there was at least one page added
-            context_text = "".join(context_text_pieces[:-1]) # Join all but the last "next page"
-        else: # only the initial header, meaning no docs were actually added
+        if len(context_text_pieces) > 1:
+            context_text = "".join(context_text_pieces[:-1])
+        else:
             context_text = "No relevant formatted API documentation pages found."
-
+        
         retrieved_sources = list(unique_sources_used)
-        # Note: context_docs here refers to the small set from temp_context_docs for source extraction,
-        # not the full content from JSON. If you need to represent the JSON content as Document objects,
-        # you'd need to construct them. For now, context_text directly holds the content.
-        # For consistency, if you need context_docs to reflect the formatted data:
         context_docs = [Document(page_content=ALL_RAG_DATA.get(src, ""), metadata={"source": src}) for src in retrieved_sources]
         end_time_formatted_build = time.time()
         print(f"SINGLE_QUERY: Formatted context text building completed in {end_time_formatted_build - start_time_formatted_build:.4f} seconds.")
 
-
     start_time_prompt_format = time.time()
     prompt_template = ChatPromptTemplate.from_template(PROMPT)
+    # The `query_text` here is the full, human-readable (reframed) question
     prompt = prompt_template.format(context=context_text, question=query_text)
     end_time_prompt_format = time.time()
     print(f"SINGLE_QUERY: Prompt formatting completed in {end_time_prompt_format - start_time_prompt_format:.4f} seconds.")
 
     print("\n📝 SINGLE_QUERY: Sending Prompt to LLM:")
     print("-" * 30)
-    # Use a reliable way to count actual documents used for context, which might be different for the two modes
     num_docs_in_context = len(context_docs) if context_docs else 0
     print(f"Number of document sources/pages in context: {num_docs_in_context}")
     print(f"Context length (chars): {len(context_text)}")
-    print(f"Query: {query_text}")
-    # print(f"\nFull Prompt:\n{prompt}\n") # Uncomment for debugging the full prompt
+    print(f"Query (for LLM): {query_text}")
     print("-" * 30)
 
     print("SINGLE_QUERY: Invoking LLM (stream)...")
@@ -365,16 +436,13 @@ def single_query(query_text: str, use_formatted_data: bool = False, k_val:int = 
     try:
         response_stream = MODEL.stream(prompt)
         end_time_llm_invoke = time.time()
-        print(f"✅ SINGLE_QUERY: LLM stream invocation (time until generator ready) completed in {end_time_llm_invoke - start_time_llm_invoke:.4f} seconds.")
+        print(f"✅ SINGLE_QUERY: LLM stream invocation completed in {end_time_llm_invoke - start_time_llm_invoke:.4f} seconds.")
     except Exception as e:
-        end_time_llm_invoke = time.time() # Still record time even on error
+        end_time_llm_invoke = time.time()
         print(f"❌ SINGLE_QUERY: Error invoking LLM stream in {end_time_llm_invoke - start_time_llm_invoke:.4f} seconds: {e}")
-        end_time_single_query = time.time() # End timer for single_query on error
-        print(f"SINGLE_QUERY: Finished (LLM invoke error) in {end_time_single_query - start_time_single_query:.4f} seconds.")
         def error_gen(): yield f"There was an error generating the response stream: {e}"
-        return error_gen(), retrieved_sources # retrieved_sources might be from RAG path
+        return error_gen(), retrieved_sources
 
-    # Removed 'del db' as DB is now global and managed outside this function's lifecycle
     end_time_single_query = time.time()
     print(f"SINGLE_QUERY: Finished total execution in {end_time_single_query - start_time_single_query:.4f} seconds.")
     return response_stream, retrieved_sources
@@ -386,35 +454,56 @@ def main():
 
     parser = argparse.ArgumentParser(description="Query the AI Documentation Chatbot.")
     parser.add_argument("query_text", type=str, help="The question to ask the chatbot.")
-    parser.add_argument("--formatted", action="store_true", help="Use formatted RAG data.") # Added option
+    parser.add_argument("--formatted", action="store_true", help="Use formatted RAG data (pre-loaded JSON).")
+    parser.add_argument("--include_cloudify", action="store_true", help="Include Cloudify API docs in the context search.")
+    parser.add_argument("-k", "--k_val", type=int, default=4, help="Number of top documents to retrieve for context.")
+
 
     args = parser.parse_args()
-    query_text = args.query_text
-    use_formatted = args.formatted # Get the flag
+    original_query_text = args.query_text
+    use_formatted = args.formatted
+    include_cloudify_flag = args.include_cloudify
+    k_value = args.k_val
 
-    # Ensure global resources are loaded before first query,
-    # which they will be if this script is run directly or imported.
-    # The global initialization block runs automatically on import.
+
     if not MODEL or not EMBEDDING_FUNCTION:
         print("Critical error: Core models (LLM or Embedding) not initialized. Exiting.")
-        end_time_main = time.time()
-        print(f"MAIN: Finished (critical init error) in {end_time_main - start_time_main:.4f} seconds.")
         return
-    if not DB and not use_formatted:
-         print("Critical error: DB not initialized and not using formatted data. Exiting.")
-         end_time_main = time.time()
-         print(f"MAIN: Finished (critical DB error) in {end_time_main - start_time_main:.4f} seconds.")
-         return
-    if use_formatted and not ALL_RAG_DATA:
-         print("Critical error: Formatted data requested but not loaded. Exiting.")
-         end_time_main = time.time()
-         print(f"MAIN: Finished (critical formatted data error) in {end_time_main - start_time_main:.4f} seconds.")
-         return
+    
+    # DB checks based on mode
+    if not use_formatted: # RAG mode
+        if not DB_DTIAS:
+            print("Critical error: DB_DTIAS not initialized for RAG mode. Exiting.")
+            return
+        if include_cloudify_flag and not DB_CLOUDIFY:
+            print("Warning: --include_cloudify specified, but Cloudify DB (DB_CLOUDIFY) is not available. Proceeding with DTIAS docs only.")
+    elif use_formatted: # Formatted data mode
+        if not ALL_RAG_DATA:
+            print("Critical error: Formatted data requested (--formatted) but not loaded. Exiting.")
+            return
+        if not DB_DTIAS:
+             print("Critical error: DB_DTIAS not initialized for source lookup in --formatted mode. Exiting.")
+             return
+        if include_cloudify_flag and not DB_CLOUDIFY:
+            print("Warning: --include_cloudify specified for --formatted mode, but Cloudify DB (DB_CLOUDIFY) is not available for source lookup. Will use DTIAS sources only.")
 
-
-    print(f"MAIN: Calling single_query for query '{query_text}'...")
-    # single_query has its own internal timers now
-    response_stream, sources = single_query(query_text, use_formatted_data=use_formatted)
+    # --- MODIFICATION: Call the query reframer ---
+    # For this script, we'll assume an empty chat history.
+    # In a real chatbot application, you would manage and pass the actual history here.
+    chat_history = []
+    print("\nMAIN: Calling query reframer...")
+    reframed_query, embedding_text = reframe_query_with_history(original_query_text, chat_history)
+    print("---")
+    
+    print(f"MAIN: Calling single_query for reframed query '{reframed_query}' with k={k_value}, include_cloudify={include_cloudify_flag}, formatted={use_formatted}...")
+    # --- MODIFICATION: Pass both reframed query and embedding text to single_query ---
+    response_stream, sources = single_query(
+        query_text=reframed_query,
+        text_to_embed=embedding_text,
+        use_cloudify_docs=include_cloudify_flag,
+        use_formatted_data=use_formatted,
+        k_val=k_value
+    )
 
     if response_stream:
         print("\nMAIN: RESPONSE STREAM from single_query:")
@@ -423,29 +512,39 @@ def main():
         first_chunk_main_received = False
         time_to_first_chunk_main = None
 
-        # Consume the stream and time the first chunk receipt in main
-        for chunk in response_stream:
+        for chunk_idx, chunk in enumerate(response_stream):
             if not first_chunk_main_received:
-                 end_time_first_chunk_main = time.time()
-                 time_to_first_chunk_main = end_time_first_chunk_main - start_time_main_stream_consume
-                 first_chunk_main_received = True
-                 print(f"\nMAIN: Time to first chunk received in main loop: {time_to_first_chunk_main:.4f} seconds.")
+                end_time_first_chunk_main = time.time()
+                time_to_first_chunk_main = end_time_first_chunk_main - start_time_main_stream_consume
+                first_chunk_main_received = True
+                print(f"\nMAIN: Time to first chunk received in main loop: {time_to_first_chunk_main:.4f} seconds.")
+            
+            if chunk_idx == 0 and isinstance(chunk, str) and chunk.startswith("Error:"):
+                 print(f"\nERROR from single_query: {chunk}")
+                 full_response = chunk
+                 break
 
-            print(chunk, end="", flush=True) # print chunks as they arrive
+            print(chunk, end="", flush=True)
             full_response += chunk
-        print() # Newline after the stream finishes
+        print()
 
         end_time_main_stream_consume = time.time()
-        print(f"\nMAIN: Finished consuming response stream in {end_time_main_stream_consume - start_time_main_stream_consume:.4f} seconds.")
+        if time_to_first_chunk_main is not None:
+             print(f"\nMAIN: Finished consuming response stream in {end_time_main_stream_consume - start_time_main_stream_consume:.4f} seconds.")
+        elif not full_response:
+             print("\nMAIN: No data received from the response stream.")
 
 
         if sources is not None:
             print("\n" + "-"*30)
             print("MAIN: Sources Used (Unique Document Sources):")
-            pprint(sources)
+            if sources:
+                pprint(sources)
+            else:
+                print("No specific sources were identified or used for this query (or an error occurred before source retrieval).")
             print("-" * 30 + "\n")
     else:
-        print("MAIN: Failed to get a response stream or critical component missing (handled inside single_query).")
+        print("MAIN: Failed to get a response stream or critical component missing (likely handled inside single_query).")
 
     end_time_main = time.time()
     print(f"MAIN: Script execution finished in {end_time_main - start_time_main:.4f} seconds.")
